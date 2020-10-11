@@ -790,6 +790,7 @@ class tvClient {
 		}
 
 		this.defaultInputID = device.defaultInputID;
+		this.controlType = device.controlType || 'none';
 
 		/* setup variables */
 		this.inputIDSet = false;
@@ -853,6 +854,7 @@ class tvClient {
 
 		this.setupTvSpeakerService();
 		this.setupInputSourcesService();
+		this.setupVolumeService();
 
 
 		logDebug('DEBUG: publishExternalAccessories zone: ' + this.zone + ': ' + this.name);
@@ -883,6 +885,49 @@ class tvClient {
 		
 		this.tvAccesory.addService(this.tvSpeakerService);
 		this.tvService.addLinkedService(this.tvSpeakerService);
+	}
+
+	/*****************************************
+	 * Start of volume service 
+	 ****************************************/
+	setupVolumeService() {
+		if (traceOn)
+			logDebug('DEBUG: setupVolumeService zone: ' + this.zone + ': ' + this.name);			
+
+		if (this.controlType === 'bulb'){
+			this.volumeService = new Service.Lightbulb(this.name, 'volumeInput');
+			this.volumeService
+				.getCharacteristic(Characteristic.On)
+				.on('get', this.getMuteState.bind(this))
+				.on('set', this.setMuteState.bind(this));
+			this.volumeService
+				.getCharacteristic(Characteristic.Brightness)
+				.on('get', this.getVolume.bind(this))
+				.on('set', this.setVolume.bind(this));
+		} else if (this.controlType === 'fan') {
+			this.volumeService = new Service.Fanv2(this.name, 'volumeInput');
+			this.volumeService
+				.getCharacteristic(Characteristic.Active)
+				.on('get', this.getMuteState.bind(this))
+				.on('set', this.setMuteState.bind(this));
+			this.volumeService
+				.getCharacteristic(Characteristic.RotationSpeed)
+				.on('get', this.getVolume.bind(this))
+				.on('set', this.setVolume.bind(this));
+		} else if (this.controlType === 'speaker') {
+			this.volumeService = new Service.Speaker(this.name, 'volumeInput');
+			this.volumeService
+				.getCharacteristic(Characteristic.Mute)
+				.on('get', this.getMuteState.bind(this))
+				.on('set', this.setMuteState.bind(this));
+			this.volumeService
+				.getCharacteristic(Characteristic.Volume)
+				.on('get', this.getVolume.bind(this))
+				.on('set', this.setVolume.bind(this));
+		} 
+
+		this.tvAccesory.addService(this.volumeService);
+		this.tvService.addLinkedService(this.volumeService);
 	}
 
 	setupInputSourcesService() {
