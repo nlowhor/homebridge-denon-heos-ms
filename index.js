@@ -423,8 +423,8 @@ class receiver {
 		if (!this.controlProtocolSet)
 			return;
 
-		if (traceOn)
-			logDebug('DEBUG: pollForUpdates zone: ' + zone + ': ' + this.ip);
+		// if (traceOn)
+		// 	logDebug('DEBUG: pollForUpdates zone: ' + zone + ': ' + this.ip);
 
 		/* Make sure that no poll is happening just after switch in input/power */
 		if (this.pollingTimeout) {
@@ -535,7 +535,10 @@ class receiver {
 		if (curName)
 			that.pollingTimeout = true;
 		// else
-			logDebug(stateInfo);
+		if (stateInfo.masterVol == undefined)
+			stateInfo.masterVol = 0;
+		
+		// logDebug(stateInfo);
 
 		if (stateInfo.power === true || stateInfo.power === false)
 			that.poweredOn[stateInfo.zone-1] = stateInfo.power;
@@ -790,7 +793,12 @@ class tvClient {
 		}
 
 		this.defaultInputID = device.defaultInputID;
-		this.controlType = device.controlType || 'none';
+		this.volumeControlType = device.volumeControlType || 'none';
+		this.volumeLimit = device.volumeLimit || 100;
+		if (typeof this.volumeLimit != 'number' || isFinite(this.volumeLimit))
+			this.volumeLimit = parseInt(this.volumeLimit);
+		if (this.volumeLimit < 0 || this.volumeLimit > 100)
+			this.volumeLimit = 100;
 
 		/* setup variables */
 		this.inputIDSet = false;
@@ -826,7 +834,8 @@ class tvClient {
 		this.tvService
 			.getCharacteristic(Characteristic.ActiveIdentifier)
 			.on('set', (inputIdentifier, callback) => {
-				this.setAppSwitchState(true, callback, this.inputIDs[inputIdentifier]);
+				this.inputIDs[inputIdentifier].setThisInput(callback);
+				// this.setAppSwitchState(true, callback, this.inputIDs[inputIdentifier].setThisInput);
 			})
 			.on('get', this.getAppSwitchState.bind(this));
 		this.tvService
@@ -892,9 +901,12 @@ class tvClient {
 	 ****************************************/
 	setupVolumeService() {
 		if (traceOn)
-			logDebug('DEBUG: setupVolumeService zone: ' + this.zone + ': ' + this.name);			
+			logDebug('DEBUG: setupVolumeService zone: ' + this.zone + ': ' + this.name);	
+			
+		let volumeConfigured = false
 
-		if (this.controlType === 'bulb'){
+		if (this.volumeControlType === 'bulb'){
+			volumeConfigured = true;
 			this.volumeService = new Service.Lightbulb(this.name, 'volumeInput');
 			this.volumeService
 				.getCharacteristic(Characteristic.On)
@@ -903,8 +915,9 @@ class tvClient {
 			this.volumeService
 				.getCharacteristic(Characteristic.Brightness)
 				.on('get', this.getVolume.bind(this))
-				.on('set', this.setVolume.bind(this));
-		} else if (this.controlType === 'fan') {
+				.on('set', this.setVolumeAbsolute.bind(this));
+		} else if (this.volumeControlType === 'fan') {
+			volumeConfigured = true;
 			this.volumeService = new Service.Fanv2(this.name, 'volumeInput');
 			this.volumeService
 				.getCharacteristic(Characteristic.Active)
@@ -913,8 +926,9 @@ class tvClient {
 			this.volumeService
 				.getCharacteristic(Characteristic.RotationSpeed)
 				.on('get', this.getVolume.bind(this))
-				.on('set', this.setVolume.bind(this));
-		} else if (this.controlType === 'speaker') {
+				.on('set', this.setVolumeAbsolute.bind(this));
+		} else if (this.volumeControlType === 'speaker') {
+			volumeConfigured = true;
 			this.volumeService = new Service.Speaker(this.name, 'volumeInput');
 			this.volumeService
 				.getCharacteristic(Characteristic.Mute)
@@ -923,11 +937,13 @@ class tvClient {
 			this.volumeService
 				.getCharacteristic(Characteristic.Volume)
 				.on('get', this.getVolume.bind(this))
-				.on('set', this.setVolume.bind(this));
+				.on('set', this.setVolumeAbsolute.bind(this));
 		} 
 
-		this.tvAccesory.addService(this.volumeService);
-		this.tvService.addLinkedService(this.volumeService);
+		if (volumeConfigured) {
+			this.tvService.addLinkedService(this.volumeService);
+			this.tvAccesory.addService(this.volumeService);
+		}
 	}
 
 	setupInputSourcesService() {
@@ -972,25 +988,16 @@ class tvClient {
 			if (inputID !== undefined && inputID !== null && inputID !== '') {
 				inputID = inputID.replace(/\s/g, ''); // remove all white spaces from the string
 
-				let tempInput = new Service.InputSource(inputID, 'inputSource' + i);
-				tempInput
-					.setCharacteristic(Characteristic.Identifier, i)
-					.setCharacteristic(Characteristic.ConfiguredName, inputName)
-					.setCharacteristic(Characteristic.IsConfigured, Characteristic.IsConfigured.CONFIGURED)
-					.setCharacteristic(Characteristic.InputSourceType, Characteristic.InputSourceType.APPLICATION)
-					.setCharacteristic(Characteristic.CurrentVisibilityState, Characteristic.CurrentVisibilityState.SHOWN);
+				logDebug(inputName);
 
-				tempInput
-					.getCharacteristic(Characteristic.ConfiguredName)
-					.on('set', (name, callback) => {
-						savedNames[inputID] = name;
-						callback()
-					});
+				var inputInfo = {
+					name: inputName,
+					inputID: inputID,
+					identifier: i,
+					defaultVolume: value.defaultVolume
+				};
 
-				this.tvAccesory.addService(tempInput);
-				if (!tempInput.linked)
-					this.tvService.addLinkedService(tempInput);
-				this.inputIDs.push(inputID);
+				this.inputIDs.push(new InputSource(this,inputInfo));
 			}
 
 		});
@@ -1014,15 +1021,19 @@ class tvClient {
 					.getCharacteristic(Characteristic.Active)
 					.updateValue(false); //tv service
 			if (this.volumeService) {
-				this.volumeService
-					.getCharacteristic(Characteristic.On)
-					.updateValue(false);
-				this.volumeService
-					.getCharacteristic(Characteristic.Volume)
-					.updateValue(this.recv.volumeLevel[this.iterator]);
-				this.volumeService
-					.getCharacteristic(Characteristic.Mute)
-					.updateValue(false);
+				if (this.volumeControlType === 'bulb') {
+					this.volumeService
+						.getCharacteristic(Characteristic.On)
+						.updateValue(false);
+				} else if (this.volumeControlType === 'fan') {
+					this.volumeService
+						.getCharacteristic(Characteristic.Active)
+						.updateValue(false);
+				} else if (this.volumeControlType === 'speaker') {
+					this.volumeService
+						.getCharacteristic(Characteristic.Mute)
+						.updateValue(true);
+				}
 			}
 		} else {
 			if (this.powerService) 
@@ -1034,15 +1045,28 @@ class tvClient {
 					.getCharacteristic(Characteristic.Active)
 					.updateValue(true); //tv service
 			if (this.volumeService) {
-				this.volumeService
-					.getCharacteristic(Characteristic.On)
-					.updateValue(true);
-				this.volumeService
-					.getCharacteristic(Characteristic.Volume)
-					.updateValue(this.recv.volumeLevel[this.iterator]);
-				this.volumeService
-					.getCharacteristic(Characteristic.Mute)
-					.updateValue(this.recv.muteState[this.iterator]);
+				if (this.volumeControlType === 'bulb') {
+					this.volumeService
+						.getCharacteristic(Characteristic.On)
+						.updateValue(!this.recv.muteState[this.iterator]);
+					this.volumeService
+						.getCharacteristic(Characteristic.Brightness)
+						.updateValue(this.recv.volumeLevel[this.iterator]);
+				} else if (this.volumeControlType === 'fan') {
+					this.volumeService
+						.getCharacteristic(Characteristic.Active)
+						.updateValue(!this.recv.muteState[this.iterator]);
+					this.volumeService
+						.getCharacteristic(Characteristic.RotationSpeed)
+						.updateValue(this.recv.volumeLevel[this.iterator]);
+				} else if (this.volumeControlType === 'speaker') {
+					this.volumeService
+						.getCharacteristic(Characteristic.Mute)
+						.updateValue(this.recv.muteState[this.iterator]);
+					this.volumeService
+						.getCharacteristic(Characteristic.Volume)
+						.updateValue(this.recv.volumeLevel[this.iterator]);
+				}
 			}
 		}
 	}
@@ -1061,7 +1085,7 @@ class tvClient {
 			if (this.recv.poweredOn[this.iterator]) {
 				let inputName = stateInfo.inputID;
 				for (let i = 0; i < this.inputIDs.length; i++) {
-					if (inputName === this.inputIDs[i]) {
+					if (inputName === this.inputIDs[i].name) {
 						if (this.inputIDSet === false)
 							this.tvService
 								.getCharacteristic(Characteristic.ActiveIdentifier)
@@ -1111,7 +1135,7 @@ class tvClient {
 				} else {
 					if (state && that.defaultInputID != undefined && that.defaultInputID != "None") {				
 						that.setDefaultInputTimeout = setTimeout(function(){
-							that.setAppSwitchState(state, callback, that.defaultInputID);
+							that.setAppSwitchState(callback, that.defaultInputID);
 						}, 8000);
 					} else {
 						clearTimeout(that.setDefaultInputTimeout);
@@ -1196,7 +1220,7 @@ class tvClient {
 		if (this.recv.poweredOn[this.iterator]) {
 			let inputName = this.recv.currentInputID[this.iterator];
 			for (let i = 0; i < this.inputIDs.length; i++) {
-				if (inputName === this.inputIDs[i]) {
+				if (inputName === this.inputIDs[i].name) {
 					this.tvService
 						.getCharacteristic(Characteristic.ActiveIdentifier)
 						.updateValue(i);
@@ -1206,13 +1230,13 @@ class tvClient {
 		callback();
 	}
 
-	setAppSwitchState(state, callback, inputName) {
+	setAppSwitchState(callback, inputName, defaultVolume = 0) {
 		if (traceOn)
-			logDebug('DEBUG: setAppSwitchState zone: ' + this.zone + ': ' + this.name);
+			logDebug('DEBUG: setAppSwitchState zone: ' + this.zone + ': ' + inputName);
 
 		this.inputIDSet = true;		
 
-		var level = this.defaultVolume[inputName];
+		var level = defaultVolume;
 
 		var inputString;
 		var volumeString;
@@ -1240,7 +1264,7 @@ class tvClient {
 				} else {
 					/* Set default volume if this is set */
 					if (level > 0) 
-						that.setDefaultVolume(that, level, volumeString);
+						that.setVolume.call(that, level);
 					
 					/* Update possible other switches and accessories too */
 					let stateInfo = {
@@ -1261,7 +1285,7 @@ class tvClient {
 
 			/* Set default volume if this is set */
 			if (level > 0) 
-				that.setDefaultVolume(that, level, volumeString);
+				that.setVolume.call(that, level);
 			
 			/* Update possible other switches and accessories too */
 			let stateInfo = {
@@ -1278,21 +1302,26 @@ class tvClient {
 	}
 
 	getMuteState(callback) {
-		g_log.warn('getMuteState');
 		if (traceOn)
 			logDebug('DEBUG: getMuteState: ' + this.name);
 
+		let state = !this.recv.muteState[this.iterator]
+		if (this.volumeControlType === 'bulb' || this.volumeControlType === 'fan')
+			state = !state;
+		
 		if (this.recv.poweredOn[this.iterator]) {
-			callback(null, this.recv.muteState[this.iterator]);
+			callback(null, state);
 		} else {
 			callback(null, false);
 		}
 	}
 
 	setMuteState(state, callback) {
-		g_log.warn('setMuteState');
 		if (traceOn)
 			logDebug('DEBUG: setMuteState zone: ' + this.zone + ': ' + this.name);
+
+		if (this.volumeControlType === 'bulb' || this.volumeControlType === 'fan')
+			state = !state;
 
 		var stateString;
 		if (this.zone == 1)
@@ -1340,7 +1369,6 @@ class tvClient {
 	}
 
 	getVolume(callback) {	
-		g_log.warn('getVolume');
 		if (traceOn)
 			logDebug('DEBUG: getVolume zone: ' + this.zone + ': ' + this.name);
 
@@ -1351,8 +1379,15 @@ class tvClient {
 		}
 	}
 
+	setVolumeAbsolute(level, callback) {		
+		if (level > this.volumeLimit)
+			level = this.volumeLimit;
+
+		this.setVolume(level, callback);
+	}
+
+
 	setVolume(level, callback) {		
-		g_log.warn('setVolume');
 		if (traceOn)
 			logDebug('DEBUG: setVolume: ' + this.name + ' to :' + level);
 
@@ -1406,52 +1441,6 @@ class tvClient {
 			that.recv.updateStates(that.recv, stateInfo, that.name);
 
 			callback();
-		}
-	}
-
-	setDefaultVolume(that, level, volumeString) {
- 		if (level < 10)
-		 	volumeString = volumeString + '0' + level.toString();
-		else
-		volumeString = volumeString + level.toString();
-
-		/* Set default volume if this is set */
-		if (that.recv.htmlControl) {
-			setTimeout(function(){
-				request('http://' + that.ip + ':' + that.tvServicePort + '/goform/formiPhoneAppDirect.xml?' + volumeString, function(error, response, body) {
-					if(error) {
-						g_log.error("ERROR: Can't connect to receiver with ip: %s and port: %s", that.ip, that.legacyPort);
-						logDebug('DEBUG: ' + error);
-						callback(error);
-					} else {
-						/* Update possible other switches and accessories too */
-						let stateInfo = {
-							zone: that.zone,
-							power: null,
-							inputID: null,
-							masterVol: parseInt(level),
-							mute: null
-						}
-						that.recv.updateStates(that.recv, stateInfo, that.name);
-					}
-				});
-			}, 2000);
-		} else {		
-			if (level > 0) {
-				setTimeout(function(){
-					that.recv.telnetConnection.send(volumeString);
-
-					/* Update possible other switches and accessories too */
-					let stateInfo = {
-						zone: that.zone,
-						power: null,
-						inputID: null,
-						masterVol: parseInt(level),
-						mute: null
-					}
-					that.recv.updateStates(that.recv, stateInfo, that.name);
-				}, 2000);
-			}
 		}
 	}
 
@@ -1519,6 +1508,205 @@ class tvClient {
 	* End of Homebridge Setters/Getters
 	****************************************/
 }
+
+class InputSource {
+	constructor(tvClient, inputInfo) {
+		if (traceOn)
+			logDebug('DEBUG: New identifier ' + inputInfo.name +  ' ' + inputInfo.identifier);
+
+		this.api = tvClient.api;
+		this.tvClient = tvClient;
+    
+		// extract name from config
+		this.name = inputInfo.name;
+		this.inputID = inputInfo.inputID;
+		this.identifier = inputInfo.identifier;
+		this.defaultVolume = inputInfo.defaultVolume || 0;
+
+		this.isVisible = 0; // SHOWN == 0, HIDDEN == 1
+		this.isConfigured = 1; // NOT_CONFIGURED = 0, CONFIGURED == 1 
+
+		/* OTHER 			== 0, 
+		 * HOME_SCREEN 		== 1, 
+		 * TUNER 			== 2, 
+		 * HDMI 			== 3, 
+		 * COMPOSITE_VIDEO 	== 4, 
+		 * S_VIDEO 			== 5
+		 * COMPONENT_VIDEO 	== 6,
+		 * DVI 				== 7
+		 * AIRPLAY 			== 8
+		 * USB 				== 9
+		 * APPLICATION 		== 10 
+		 */
+		this.inputSourceType = 3; 
+
+		/* OTHER 		== 0, 
+		 * TV 			== 1, 
+		 * RECORDING 	== 2, 
+		 * TUNER 		== 3, 
+		 * PLAYBACK 	== 4, 
+		 * AUDIO_SYSTEM == 5
+		 * UNKNOWN 		== 6
+		 */
+		this.inputDeviceType = 0;
+		
+		// create a new Input Source service
+		this.inputService = new Service.InputSource(this.inputID, 'inputSource_' + this.identifier);
+		// this.inputService = new this.Service(this.Service.InputSource);
+
+		// create handlers for required characteristics
+		this.inputService
+			.setCharacteristic(Characteristic.Name, this.name)
+			.setCharacteristic(Characteristic.Identifier, this.identifier);
+
+		this.inputService
+			.getCharacteristic(Characteristic.ConfiguredName)
+		  	.on('get', this.handleConfiguredNameGet.bind(this))
+		  	.on('set', this.handleConfiguredNameSet.bind(this));
+  
+		this.inputService
+			.getCharacteristic(Characteristic.TargetVisibilityState)
+		  	.on('get', this.handleTargetVisibilityStateGet.bind(this))
+		  	.on('set', this.handleTargetVisibilityStateSet.bind(this));
+  
+		this.inputService
+			.getCharacteristic(Characteristic.CurrentVisibilityState)
+			.on('get', this.handleCurrentVisibilityStateGet.bind(this));
+			  
+		this.inputService
+		  	.getCharacteristic(Characteristic.IsConfigured)
+		  	.on('get', this.handleIsConfiguredGet.bind(this))
+			.on('set', this.handleIsConfiguredSet.bind(this));
+
+		this.inputService
+			.getCharacteristic(Characteristic.InputSourceType)
+			.on('get', this.handleInputSourceTypeGet.bind(this));
+
+		this.inputService
+			.getCharacteristic(Characteristic.InputSourceType)
+			.on('get', this.handleInputSourceTypeGet.bind(this));
+			  
+		this.tvClient.tvService.addLinkedService(this.inputService);
+		this.tvClient.tvAccesory.addService(this.inputService);
+	}
+	
+	setThisInput(callback) {
+		logDebug('DEBUG: setAppSwitchState ' + this.inputID);
+		this.tvClient.setAppSwitchState.call(this.tvClient, callback, this.inputID, this.defaultVolume);
+	}
+
+	name() { 
+		return this.inputName; 
+	}
+
+	/**
+	 * Handle requests to get the current value of the "Is Configured" characteristic
+	 */
+	handleConfiguredNameGet(callback) {
+		if (traceOn)
+			logDebug('DEBUG: Triggered GET ConfiguredName: ' + this.name);
+
+		let currentValue = this.name ;
+		
+		callback(null, currentValue);
+	}
+  
+	/**
+	 * Handle requests to set the "Configured Name" characteristic
+	 */
+	handleConfiguredNameSet(value, callback) {		  
+		if (traceOn)
+			logDebug('DEBUG: Triggered SET ConfiguredName: ' + value);
+
+		this.name = value;
+
+	  	callback(null);
+	}
+
+	/**
+	 * Handle requests to get the current value of the "Is Configured" characteristic
+	 */
+	handleIsConfiguredGet(callback) {	
+		if (traceOn)
+			logDebug('DEBUG: Triggered GET IsConfigured: ' + (this.isConfigured === 0 ? 'NOT_CONFIGURED' : 'CONFIGURED'));
+
+		let currentValue = this.isConfigured;
+
+		callback(null, currentValue);
+	}
+
+	/**
+	 * Handle requests to set the "Is Configured" characteristic
+	 */
+	handleIsConfiguredSet(value, callback) {
+		if (traceOn)
+			logDebug('DEBUG: Triggered SET IsConfigured: ' + (this.isConfigured === 0 ? 'NOT_CONFIGURED' : 'CONFIGURED'));
+
+		this.isConfigured = value;
+
+		callback(null);
+	}
+
+	/**
+	 * Handle requests to get the current value of the "Input Source Type" characteristic
+	 */
+	handleInputSourceTypeGet(callback) {
+		if (traceOn)
+			logDebug('DEBUG: Triggered GET InputSourceType: ' + this.inputSourceType);
+
+		let currentValue = this.inputSourceType;
+
+		callback(null, currentValue);
+	}
+
+	/**
+	 * Handle requests to get the current value of the "Input Source Type" characteristic
+	 */
+	handleInputDeviceTypeGet(callback) {
+		if (traceOn)
+			logDebug('DEBUG: Triggered GET InputDeviceType: ' + this.inputDeviceType);
+
+		let currentValue = this.inputDeviceType;
+
+		callback(null, currentValue);
+	}
+    
+	/**
+	 * Handle requests to get the "Target Visibility State" characteristic
+	 */
+	handleTargetVisibilityStateGet(callback) {  
+		if (traceOn)
+			logDebug('DEBUG: Triggered GET TargetVisibilityState: ' + (this.isVisible === 0 ? 'SHOWN' : 'HIDDEN'));
+
+		let currentValue = this.isVisible;
+  
+	  	callback(null, currentValue);
+	}
+	/**
+	 * Handle requests to Set the "Target Visibility State" characteristic
+	 */
+	handleTargetVisibilityStateSet(value, callback) {
+		if (traceOn)
+			logDebug('DEBUG: Triggered SET TargetVisibilityState: ' + (value === 0 ? 'SHOWN' : 'HIDDEN'));
+
+		this.isVisible = value;
+  
+		callback(null);
+	}
+	/**
+	 * Handle requests to get the "Current Visibility State" characteristic
+	 */
+	handleCurrentVisibilityStateGet(callback) {  
+		if (traceOn)
+			logDebug('DEBUG: Triggered GET CurrentVisibilityState: ' + (this.isVisible === 0 ? 'SHOWN' : 'HIDDEN'));
+
+		let currentValue = this.isVisible;		  
+  
+	  	callback(null, currentValue);
+	}
+  
+  
+  }
 
 class legacyClient {
 	constructor(recv, switches) {

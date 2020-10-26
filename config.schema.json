@@ -82,6 +82,40 @@
 							"default": true,
 							"required": true
 						},
+						"volumeControlType": {
+							"title": "Volume control block type",
+							"description": "You can use a lightbulb, fan or speaker to control the volume level. The speaker is currently not supported in Apple's home app, but it does work in Home+ or Eve",
+							"type": "string",
+							"required": true,
+							"oneOf": [
+								{
+									"title": "bulb",
+									"enum": [
+										"bulb"
+									]
+								},
+								{
+									"title": "fan",
+									"enum": [
+										"fan"
+									]
+								},
+								{
+									"title": "speaker",
+									"enum": [
+										"speaker"
+									]
+								}
+							]
+						},
+						"volumeLimit": {
+							"title": "Volume limit",
+							"description": "This is the maximum volume you can set with the volume control",
+							"type": "integer",
+							"default": 60,
+							"required": true,
+							"maximum": 100
+						},
 						"defaultInputID": {
 							"title": "Default InputID",
 							"type": "string",
