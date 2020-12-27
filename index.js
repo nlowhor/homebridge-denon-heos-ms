@@ -1182,7 +1182,7 @@ class tvClient {
 		var volumeString;
 		let inputNameN = inputName.replace('/', '%2F');
 		if (this.zone == 1) {
-			inputString = 'SI' + inputNameN;
+			inputString = inputNameN;
 			volumeString = 'MV';
 		} else if (this.zone == 2 || this.zone == 3) {
 			inputString = 'Z' + this.zone + inputNameN;
@@ -1634,7 +1634,7 @@ class legacyClient {
 		var inputString;
 		let inputNameN = this.inputID.replace('/', '%2F');
 		if (this.zone == 1) {
-			inputString = 'SI' + inputNameN;
+			inputString = inputNameN;
 		} else if (this.zone == 2 || this.zone == 3) {
 			inputString = 'Z' + this.zone + inputNameN;
 		}
@@ -1720,7 +1720,7 @@ class legacyClient {
 		inputName = inputName.replace('/', '%2F');
 
 		if (this.zone == 1) {
-			inputString = 'SI' + inputName;
+			inputString = inputName;
 			stateString = 'PW' + (state ? 'ON' : 'STANDBY');
 		} else if (this.zone == 2 || this.zone == 3) {
 			inputString = 'Z' + this.zone + inputName;
